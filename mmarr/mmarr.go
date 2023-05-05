@@ -150,12 +150,12 @@ func (arr *Array[T]) Append(val *T) (pos int) {
 
 func (arr *Array[T]) Set(pos int, val *T) {
 	idx := arr.posToIdx(pos)
-	copy(arr.data[idx:idx+arr.itemSize], arr.valToBytes(val))
+	copy(arr.data[idx:idx+arr.itemSize], utils.PointerToBytes(val, arr.itemSize))
 }
 
 func (arr *Array[T]) Get(pos int) *T {
 	idx := arr.posToIdx(pos)
-	return arr.bytesToVal(arr.data[idx : idx+arr.itemSize])
+	return utils.BytesToPointer[T](arr.data[idx : idx+arr.itemSize])
 }
 
 func (arr *Array[T]) Cap() int {
@@ -171,15 +171,7 @@ func (arr *Array[T]) ItemSize() int {
 }
 
 func (arr *Array[T]) Items() []T {
-	b := arr.data[headSize : headSize+arr.itemSize*arr.length]
-	bytesHeader := (*sliceHeader)(unsafe.Pointer(&b))
-	header := sliceHeader{
-		Data: bytesHeader.Data,
-		Len:  arr.length,
-		Cap:  arr.capacity,
-	}
-
-	return *(*[]T)(unsafe.Pointer(&header))
+	return *utils.BytesToPointer[[]T](arr.data[headSize : headSize+arr.itemSize*arr.length])
 }
 
 func (arr *Array[T]) fileSize() int {
@@ -188,19 +180,4 @@ func (arr *Array[T]) fileSize() int {
 
 func (arr *Array[T]) posToIdx(pos int) int {
 	return headSize + (((pos + arr.length) % arr.length) * arr.itemSize)
-}
-
-func (arr Array[T]) valToBytes(val *T) []byte {
-	header := sliceHeader{
-		Data: unsafe.Pointer(val),
-		Len:  arr.itemSize,
-		Cap:  arr.itemSize,
-	}
-
-	return *(*[]byte)(unsafe.Pointer(&header))
-}
-
-func (Array[T]) bytesToVal(b []byte) *T {
-	header := *(*sliceHeader)(unsafe.Pointer(&b))
-	return (*T)(header.Data)
 }

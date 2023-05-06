@@ -19,6 +19,21 @@ func NewSym[T any](filepath string, size int) (m *Matrix[T], err error) {
 	return
 }
 
+func OpenSymRO[T any](filepath string) (m *Matrix[T], err error) {
+	arr, err := mmarr.OpenRO[T](filepath)
+
+	if err != nil {
+		return
+	}
+
+	m = &Matrix[T]{
+		arr:  arr,
+		size: countFromHandshakes(arr.Len()),
+	}
+
+	return
+}
+
 type Matrix[T any] struct {
 	arr  *mmarr.Array[T]
 	size int

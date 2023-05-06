@@ -115,6 +115,61 @@ func New[T any](filepath string, lenCap ...int) (arr *Array[T], err error) {
 	return
 }
 
+func OpenRO[T any](filepath string) (arr *Array[T], err error) {
+	var val T
+
+	arr = &Array[T]{
+		itemSize: int(unsafe.Sizeof(val)),
+	}
+
+	if arr.itemSize <= 0 {
+		return nil, errors.New("invalid item size")
+	}
+
+	info, err := os.Stat(filepath)
+
+	if err != nil {
+		return
+	}
+
+	if arr.file, err = os.OpenFile(filepath, os.O_RDONLY, 0); err != nil {
+		return
+	}
+
+	var head [headSize]byte
+
+	if _, err = io.ReadFull(arr.file, head[:]); err != nil {
+		return
+	}
+
+	itemSize, length, capacity := int(utils.Endian.Uint64(head[:8])), int(utils.Endian.Uint64(head[8:16])), int(utils.Endian.Uint64(head[16:24]))
+
+	if itemSize != arr.itemSize {
+		return nil, errors.New("invalid item size")
+	}
+
+	if arr.length != 0 && length != arr.length {
+		return nil, errors.New("invalid length")
+	}
+
+	if arr.capacity != 0 && capacity != arr.capacity {
+		return nil, errors.New("invalid capacity")
+	}
+
+	arr.length = length
+	arr.capacity = capacity
+
+	if info.Size() != int64(arr.fileSize()) {
+		return nil, errors.New("invalid file size")
+	}
+
+	if arr.data, err = mmap.Map(arr.file, mmap.RDONLY, 0); err != nil {
+		return
+	}
+
+	return
+}
+
 // Memory-mapped array
 type Array[T any] struct {
 	data     mmap.MMap

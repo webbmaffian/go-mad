@@ -15,10 +15,12 @@ func main() {
 
 	defer m.Close()
 
-	// m.Add(123, 456)
-	// m.Add(123, 789)
+	m.Add(123, 456)
+	m.Add(123, 789)
 
-	iter := m.Find(123)
+	log.Println(m.Len(), "items")
+
+	iter := m.Iterate()
 
 	for iter.Next() {
 		key, val := iter.Key(), iter.Val()

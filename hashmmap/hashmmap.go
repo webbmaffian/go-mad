@@ -170,11 +170,28 @@ func (m *Raw[K, V]) Len() int {
 	return int(m.head.length)
 }
 
-func (m *Raw[K, V]) Find(key K) Iterator[K, V] {
-	return Iterator[K, V]{
+func (m *Raw[K, V]) Count(key K) (count int) {
+	iter := m.Find(key)
+
+	for iter.Next() {
+		count++
+	}
+
+	return
+}
+
+func (m *Raw[K, V]) Find(key K) Finder[K, V] {
+	return Finder[K, V]{
 		raw:     m,
 		key:     key,
 		nextIdx: *m.getIndexAtIndex(m.getBucketIdx(m.getBucket(key))),
+	}
+}
+
+func (m *Raw[K, V]) Iterate() Iterator[K, V] {
+	return Iterator[K, V]{
+		raw:     m,
+		nextIdx: *m.getIndexAtIndex(m.getBucketIdx(0)),
 	}
 }
 

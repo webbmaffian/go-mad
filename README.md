@@ -3,6 +3,7 @@ Memory-mapped ([mmap](https://en.wikipedia.org/wiki/Memory-mapped_file)) abstrac
 
 - Array ([mmarr](./mmarr))
 - Hash table ([hashmmap](./hashmmap))
+- Symmetric matrix ([matrix](./matrix))
 
 ---
 

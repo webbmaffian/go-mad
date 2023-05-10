@@ -47,6 +47,10 @@ func (m *Matrix[T]) Get(x, y int) *T {
 	return m.arr.Get(m.pos(x, y))
 }
 
+func (m *Matrix[T]) At(x, y int) T {
+	return *m.arr.Get(m.pos(x, y))
+}
+
 func (m *Matrix[T]) Len() int {
 	return m.size
 }

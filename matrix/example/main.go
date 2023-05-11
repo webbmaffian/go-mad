@@ -18,5 +18,5 @@ func main() {
 	// m.Set(1, 2, 345.678)
 
 	log.Println(*m.Get(2, 1))
-	log.Println(m.Len())
+	log.Println(m.Dims())
 }

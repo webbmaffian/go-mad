@@ -1,11 +1,16 @@
 package matrix
 
 import (
+	"unsafe"
+
+	"github.com/webbmaffian/go-mad/matrix/internal/gonum"
 	"github.com/webbmaffian/go-mad/mmarr"
 )
 
-func NewSym[T any](filepath string, size int) (m *Matrix[T], err error) {
-	arr, err := mmarr.New[T](filepath, handshakes(size))
+var _ gonum.Mutable = (*Matrix[float64])(nil)
+
+func New[T any](filepath string, rows int, cols int) (m *Matrix[T], err error) {
+	arr, err := mmarr.New[T](filepath, rows*cols)
 
 	if err != nil {
 		return
@@ -13,13 +18,14 @@ func NewSym[T any](filepath string, size int) (m *Matrix[T], err error) {
 
 	m = &Matrix[T]{
 		arr:  arr,
-		size: countFromHandshakes(arr.Len()),
+		rows: rows,
+		cols: cols,
 	}
 
 	return
 }
 
-func OpenSymRO[T any](filepath string) (m *Matrix[T], err error) {
+func OpenRO[T any](filepath string, rows int, cols int) (m *Matrix[T], err error) {
 	arr, err := mmarr.OpenRO[T](filepath)
 
 	if err != nil {
@@ -28,7 +34,8 @@ func OpenSymRO[T any](filepath string) (m *Matrix[T], err error) {
 
 	m = &Matrix[T]{
 		arr:  arr,
-		size: countFromHandshakes(arr.Len()),
+		rows: rows,
+		cols: cols,
 	}
 
 	return
@@ -36,11 +43,31 @@ func OpenSymRO[T any](filepath string) (m *Matrix[T], err error) {
 
 type Matrix[T any] struct {
 	arr  *mmarr.Array[T]
-	size int
+	rows int
+	cols int
 }
 
-func (m *Matrix[T]) Set(x, y int, val T) {
-	m.arr.Set(m.pos(x, y), &val)
+// Dims returns the dimensions (rows + columns) of a Matrix.
+func (m *Matrix[T]) Dims() (r, c int) {
+	return m.rows, m.cols
+}
+
+// T returns the transpose of the Matrix. Whether T returns a copy of the
+// underlying data is implementation dependent.
+func (m *Matrix[T]) T() gonum.Matrix {
+	var v T
+	var t any = v
+
+	if _, ok := t.(float64); ok {
+		return (*Matrix[float64])(unsafe.Pointer(m))
+	}
+
+	return nil
+}
+
+// Set alters the matrix element at row i, column j to v.
+func (m *Matrix[T]) Set(x, y int, v T) {
+	m.arr.Set(m.pos(x, y), &v)
 }
 
 func (m *Matrix[T]) Get(x, y int) *T {
@@ -51,12 +78,12 @@ func (m *Matrix[T]) At(x, y int) T {
 	return *m.arr.Get(m.pos(x, y))
 }
 
-func (m *Matrix[T]) Len() int {
-	return m.size
+func (m *Matrix[T]) Rows() int {
+	return m.rows
 }
 
-func (m *Matrix[T]) Cap() int {
-	return m.size
+func (m *Matrix[T]) Cols() int {
+	return m.cols
 }
 
 func (m *Matrix[T]) Flush() error {
@@ -67,17 +94,6 @@ func (m *Matrix[T]) Close() error {
 	return m.arr.Close()
 }
 
-func (m *Matrix[T]) pos(x, y int) int {
-	x, y = maxMin(x, y)
-	return ((y * (m.size - 1)) - ((y * (y + 1)) / 2)) + x - 1
-}
-
-func maxMin(a, b int) (max, min int) {
-	if a > b {
-		return a, b
-	} else if a < b {
-		return b, a
-	}
-
-	panic("A and B cannot be the same value")
+func (m *Matrix[T]) pos(i, j int) int {
+	return i*m.cols + j
 }

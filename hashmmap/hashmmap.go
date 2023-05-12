@@ -194,7 +194,7 @@ func (m *Raw[K, V]) Get(key K) (val V, ok bool) {
 	f := m.Find(key)
 
 	for f.Next() {
-		var v any = f.Val()
+		var v any = f.link.Val
 
 		if ok = v.(Keyed[K]).Key() == key; ok {
 			val = f.link.Val

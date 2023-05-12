@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"unsafe"
 
 	"github.com/edsrzf/mmap-go"
 	"github.com/webbmaffian/go-mad/internal/utils"
@@ -67,6 +68,11 @@ func NewRaw[K utils.Unsigned, V any](filepath string, capacity ...K) (m *Raw[K, 
 
 	m.head = utils.BytesToPointer[hashmmapHeader[K]](m.data[:m.head.headSize])
 
+	var v V
+	var val any = v
+
+	_, m.keyed = val.(Keyed[K])
+
 	return
 }
 
@@ -104,9 +110,10 @@ func OpenRawRO[K utils.Unsigned, V any](filepath string) (m *Raw[K, V], err erro
 
 // Memory-mapped hashmap
 type Raw[K utils.Unsigned, V any] struct {
-	data mmap.MMap
-	file *os.File
-	head *hashmmapHeader[K]
+	data  mmap.MMap
+	file  *os.File
+	head  *hashmmapHeader[K]
+	keyed bool
 }
 
 func (m *Raw[K, V]) validateHead(fileSize int64) (err error) {
@@ -175,6 +182,25 @@ func (m *Raw[K, V]) Count(key K) (count int) {
 
 	for iter.Next() {
 		count++
+	}
+
+	return
+}
+
+func (m *Raw[K, V]) Get(key K) (val V, ok bool) {
+	if !m.keyed {
+		return
+	}
+
+	f := m.Find(key)
+
+	for f.Next() {
+		v := *(*Keyed[K])(unsafe.Pointer(&f.link.Key))
+
+		if ok = v.Key() == key; ok {
+			val = f.link.Val
+			break
+		}
 	}
 
 	return

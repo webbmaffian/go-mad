@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"unsafe"
 
 	"github.com/edsrzf/mmap-go"
 	"github.com/webbmaffian/go-mad/internal/utils"
@@ -195,9 +194,9 @@ func (m *Raw[K, V]) Get(key K) (val V, ok bool) {
 	f := m.Find(key)
 
 	for f.Next() {
-		v := *(*Keyed[K])(unsafe.Pointer(&f.link.Key))
+		var v any = f.Val()
 
-		if ok = v.Key() == key; ok {
+		if ok = v.(Keyed[K]).Key() == key; ok {
 			val = f.link.Val
 			break
 		}

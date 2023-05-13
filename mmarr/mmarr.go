@@ -70,6 +70,8 @@ func NewWithHeader[T any, H any](filepath string, lenCap ...int) (arr *Array[T, 
 		}
 	}
 
+	arr.head = utils.BytesToPointer[header[H]](arr.data[:arr.head.headSize])
+
 	return
 }
 

@@ -33,11 +33,11 @@ func newHeader[T any, H any](lenCap ...int) *header[H] {
 }
 
 type header[H any] struct {
+	custom   H
 	headSize int
 	itemSize int
 	length   int
 	capacity int
-	custom   H
 }
 
 func (h header[H]) fileSize() int {

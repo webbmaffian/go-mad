@@ -9,8 +9,6 @@ import (
 	"github.com/webbmaffian/go-mad/internal/utils"
 )
 
-const headSize = 24
-
 // Initialize a new memory-mapped array with a filepath, length and capacity.
 // If file doesn't exist, capacity is mandatory. If left out, capacity will
 // equal to the length. If capacity and/or length is provided, and the file
@@ -63,9 +61,9 @@ func NewWithHeader[T any, H any](filepath string, lenCap ...int) (arr *Array[T, 
 	}
 
 	if created {
-		if copy(arr.data[:arr.head.headSize], utils.PointerToBytes(arr.head, arr.head.headSize)) != arr.head.headSize {
-			return nil, errors.New("failed to write header")
-		}
+		// if copy(arr.data[:arr.head.headSize], utils.PointerToBytes(arr.head, arr.head.headSize)) != arr.head.headSize {
+		// 	return nil, errors.New("failed to write header")
+		// }
 
 		if err = arr.Flush(); err != nil {
 			return
@@ -178,7 +176,8 @@ func (arr *Array[T, H]) Append(val *T) (pos int) {
 
 func (arr *Array[T, H]) Set(pos int, val *T) {
 	idx := arr.posToIdx(pos)
-	copy(arr.data[idx:idx+arr.head.itemSize], utils.PointerToBytes(val, arr.head.itemSize))
+	p := utils.BytesToPointer[T](arr.data[idx : idx+arr.head.itemSize])
+	*p = *val
 }
 
 func (arr *Array[T, H]) Get(pos int) *T {
@@ -199,7 +198,7 @@ func (arr *Array[T, H]) ItemSize() int {
 }
 
 func (arr *Array[T, H]) Items() []T {
-	return *utils.BytesToPointer[[]T](arr.data[headSize : headSize+arr.head.itemSize*arr.head.length])
+	return *utils.BytesToPointer[[]T](arr.data[arr.head.headSize : arr.head.headSize+arr.head.itemSize*arr.head.length])
 }
 
 func (arr Array[T, H]) Head() *H {
@@ -207,5 +206,5 @@ func (arr Array[T, H]) Head() *H {
 }
 
 func (arr *Array[T, H]) posToIdx(pos int) int {
-	return headSize + (((pos + arr.head.length) % arr.head.length) * arr.head.itemSize)
+	return arr.head.headSize + (((pos + arr.head.length) % arr.head.length) * arr.head.itemSize)
 }

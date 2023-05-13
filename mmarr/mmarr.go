@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"unsafe"
 
 	"github.com/edsrzf/mmap-go"
 	"github.com/webbmaffian/go-mad/internal/utils"
@@ -17,33 +16,17 @@ const headSize = 24
 // equal to the length. If capacity and/or length is provided, and the file
 // already exists, they must match the values from the file.
 // The provided type (`T`) MUST NOT contain any pointer nor slice.
-func New[T any](filepath string, lenCap ...int) (arr *Array[T], err error) {
-	var val T
+func New[T any](filepath string, lenCap ...int) (arr *Array[T, struct{}], err error) {
+	return NewWithHeader[T, struct{}](filepath, lenCap...)
+}
 
-	arr = &Array[T]{
-		itemSize: int(unsafe.Sizeof(val)),
+func NewWithHeader[T any, H any](filepath string, lenCap ...int) (arr *Array[T, H], err error) {
+	arr = &Array[T, H]{
+		head: newHeader[T, H](lenCap...),
 	}
 
-	if arr.itemSize <= 0 {
-		return nil, errors.New("invalid item size")
-	}
-
-	if lenCap != nil {
-		arr.length = lenCap[0]
-
-		if len(lenCap) > 1 {
-			arr.capacity = lenCap[1]
-		} else {
-			arr.capacity = arr.length
-		}
-
-		if arr.capacity <= 0 {
-			return nil, errors.New("capacity must be at least 1")
-		}
-
-		if arr.capacity < arr.length {
-			return nil, errors.New("capacity must be greater or equal to the length")
-		}
+	if arr.head.itemSize <= 0 {
+		return nil, errors.New("item must be at least 1 byte")
 	}
 
 	var created bool
@@ -54,34 +37,11 @@ func New[T any](filepath string, lenCap ...int) (arr *Array[T], err error) {
 			return
 		}
 
-		var head [headSize]byte
-
-		if _, err = io.ReadFull(arr.file, head[:]); err != nil {
+		if err = arr.validateHead(info.Size()); err != nil {
 			return
 		}
-
-		itemSize, length, capacity := int(utils.Endian.Uint64(head[:8])), int(utils.Endian.Uint64(head[8:16])), int(utils.Endian.Uint64(head[16:24]))
-
-		if itemSize != arr.itemSize {
-			return nil, errors.New("invalid item size")
-		}
-
-		if arr.length != 0 && length != arr.length {
-			return nil, errors.New("invalid length")
-		}
-
-		if arr.capacity != 0 && capacity != arr.capacity {
-			return nil, errors.New("invalid capacity")
-		}
-
-		arr.length = length
-		arr.capacity = capacity
-
-		if info.Size() != int64(arr.fileSize()) {
-			return nil, errors.New("invalid file size")
-		}
 	} else if os.IsNotExist(err) {
-		if arr.capacity == 0 {
+		if arr.head.capacity == 0 {
 			return nil, errors.New("capacity is mandatory")
 		}
 
@@ -89,7 +49,7 @@ func New[T any](filepath string, lenCap ...int) (arr *Array[T], err error) {
 			return
 		}
 
-		if err = arr.file.Truncate(int64(arr.fileSize())); err != nil {
+		if err = arr.file.Truncate(int64(arr.head.fileSize())); err != nil {
 			return
 		}
 
@@ -103,9 +63,9 @@ func New[T any](filepath string, lenCap ...int) (arr *Array[T], err error) {
 	}
 
 	if created {
-		utils.Endian.PutUint32(arr.data[:8], uint32(arr.itemSize))
-		utils.Endian.PutUint32(arr.data[8:16], uint32(arr.length))
-		utils.Endian.PutUint32(arr.data[16:24], uint32(arr.capacity))
+		if copy(arr.data[:arr.head.headSize], utils.PointerToBytes(arr.head, arr.head.headSize)) != arr.head.headSize {
+			return nil, errors.New("failed to write header")
+		}
 
 		if err = arr.Flush(); err != nil {
 			return
@@ -115,15 +75,17 @@ func New[T any](filepath string, lenCap ...int) (arr *Array[T], err error) {
 	return
 }
 
-func OpenRO[T any](filepath string) (arr *Array[T], err error) {
-	var val T
+func OpenRO[T any](filepath string) (arr *Array[T, struct{}], err error) {
+	return OpenROWithHeader[T, struct{}](filepath)
+}
 
-	arr = &Array[T]{
-		itemSize: int(unsafe.Sizeof(val)),
+func OpenROWithHeader[T any, H any](filepath string) (arr *Array[T, H], err error) {
+	arr = &Array[T, H]{
+		head: newHeader[T, H](),
 	}
 
-	if arr.itemSize <= 0 {
-		return nil, errors.New("invalid item size")
+	if arr.head.itemSize <= 0 {
+		return nil, errors.New("item must be at least 1 byte")
 	}
 
 	info, err := os.Stat(filepath)
@@ -136,31 +98,8 @@ func OpenRO[T any](filepath string) (arr *Array[T], err error) {
 		return
 	}
 
-	var head [headSize]byte
-
-	if _, err = io.ReadFull(arr.file, head[:]); err != nil {
+	if err = arr.validateHead(info.Size()); err != nil {
 		return
-	}
-
-	itemSize, length, capacity := int(utils.Endian.Uint64(head[:8])), int(utils.Endian.Uint64(head[8:16])), int(utils.Endian.Uint64(head[16:24]))
-
-	if itemSize != arr.itemSize {
-		return nil, errors.New("invalid item size")
-	}
-
-	if arr.length != 0 && length != arr.length {
-		return nil, errors.New("invalid length")
-	}
-
-	if arr.capacity != 0 && capacity != arr.capacity {
-		return nil, errors.New("invalid capacity")
-	}
-
-	arr.length = length
-	arr.capacity = capacity
-
-	if info.Size() != int64(arr.fileSize()) {
-		return nil, errors.New("invalid file size")
 	}
 
 	if arr.data, err = mmap.Map(arr.file, mmap.RDONLY, 0); err != nil {
@@ -171,19 +110,54 @@ func OpenRO[T any](filepath string) (arr *Array[T], err error) {
 }
 
 // Memory-mapped array
-type Array[T any] struct {
-	data     mmap.MMap
-	file     *os.File
-	itemSize int
-	length   int
-	capacity int
+type Array[T any, H any] struct {
+	data mmap.MMap
+	file *os.File
+	head *header[H]
 }
 
-func (arr *Array[T]) Flush() error {
+func (m *Array[T, H]) validateHead(fileSize int64) (err error) {
+	if fileSize < int64(m.head.headSize) {
+		return errors.New("file too small")
+	}
+
+	if m.file == nil {
+		return errors.New("file is not open")
+	}
+
+	if _, err = m.file.Seek(0, io.SeekStart); err != nil {
+		return
+	}
+
+	b := make([]byte, m.head.headSize)
+
+	if _, err = io.ReadFull(m.file, b); err != nil {
+		return
+	}
+
+	head := utils.BytesToPointer[header[H]](b)
+
+	if head.itemSize != m.head.itemSize {
+		return errors.New("invalid item size")
+	}
+
+	// A capacity can never me less than the length
+	if head.capacity < head.length {
+		return errors.New("invalid capacity")
+	}
+
+	if fileSize != int64(head.fileSize()) {
+		return errors.New("invalid file size")
+	}
+
+	return
+}
+
+func (arr *Array[T, H]) Flush() error {
 	return arr.data.Flush()
 }
 
-func (arr *Array[T]) Close() (err error) {
+func (arr *Array[T, H]) Close() (err error) {
 	if err = arr.Flush(); err != nil {
 		return
 	}
@@ -191,48 +165,47 @@ func (arr *Array[T]) Close() (err error) {
 	return arr.file.Close()
 }
 
-func (arr *Array[T]) Append(val *T) (pos int) {
-	if arr.length >= arr.capacity {
+func (arr *Array[T, H]) Append(val *T) (pos int) {
+	if arr.head.length >= arr.head.capacity {
 		return -1
 	}
 
-	pos = arr.length
+	pos = arr.head.length
 	arr.Set(pos, val)
-	arr.length++
-	utils.Endian.PutUint64(arr.data[8:16], uint64(arr.length))
+	arr.head.length++
 	return
 }
 
-func (arr *Array[T]) Set(pos int, val *T) {
+func (arr *Array[T, H]) Set(pos int, val *T) {
 	idx := arr.posToIdx(pos)
-	copy(arr.data[idx:idx+arr.itemSize], utils.PointerToBytes(val, arr.itemSize))
+	copy(arr.data[idx:idx+arr.head.itemSize], utils.PointerToBytes(val, arr.head.itemSize))
 }
 
-func (arr *Array[T]) Get(pos int) *T {
+func (arr *Array[T, H]) Get(pos int) *T {
 	idx := arr.posToIdx(pos)
-	return utils.BytesToPointer[T](arr.data[idx : idx+arr.itemSize])
+	return utils.BytesToPointer[T](arr.data[idx : idx+arr.head.itemSize])
 }
 
-func (arr *Array[T]) Cap() int {
-	return arr.capacity
+func (arr *Array[T, H]) Cap() int {
+	return arr.head.capacity
 }
 
-func (arr *Array[T]) Len() int {
-	return arr.length
+func (arr *Array[T, H]) Len() int {
+	return arr.head.length
 }
 
-func (arr *Array[T]) ItemSize() int {
-	return arr.itemSize
+func (arr *Array[T, H]) ItemSize() int {
+	return arr.head.itemSize
 }
 
-func (arr *Array[T]) Items() []T {
-	return *utils.BytesToPointer[[]T](arr.data[headSize : headSize+arr.itemSize*arr.length])
+func (arr *Array[T, H]) Items() []T {
+	return *utils.BytesToPointer[[]T](arr.data[headSize : headSize+arr.head.itemSize*arr.head.length])
 }
 
-func (arr *Array[T]) fileSize() int {
-	return arr.itemSize*arr.capacity + headSize
+func (arr Array[T, H]) Head() *H {
+	return &arr.head.custom
 }
 
-func (arr *Array[T]) posToIdx(pos int) int {
-	return headSize + (((pos + arr.length) % arr.length) * arr.itemSize)
+func (arr *Array[T, H]) posToIdx(pos int) int {
+	return headSize + (((pos + arr.head.length) % arr.head.length) * arr.head.itemSize)
 }

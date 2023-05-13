@@ -43,7 +43,7 @@ func OpenSymRO[T any](filepath string) (m *SymMatrix[T], err error) {
 }
 
 type SymMatrix[T any] struct {
-	arr  *mmarr.Array[T]
+	arr  *mmarr.Array[T, struct{}]
 	size int
 }
 

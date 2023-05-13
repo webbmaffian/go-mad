@@ -1,6 +1,7 @@
 package matrix
 
 import (
+	"errors"
 	"unsafe"
 
 	"github.com/webbmaffian/go-mad/matrix/internal/gonum"
@@ -10,23 +11,37 @@ import (
 var _ gonum.Mutable = (*Matrix[float64])(nil)
 
 func New[T any](filepath string, rows int, cols int) (m *Matrix[T], err error) {
-	arr, err := mmarr.New[T](filepath, rows*cols)
+	arr, err := mmarr.NewWithHeader[T, matrixHead](filepath, rows*cols)
 
 	if err != nil {
 		return
 	}
 
+	h := arr.Head()
+
+	if h.rows != 0 && h.rows != rows {
+		err = errors.New("mismatching rows")
+		return
+	}
+
+	if h.cols != 0 && h.cols != cols {
+		err = errors.New("mismatching rows")
+		return
+	}
+
+	h.rows = rows
+	h.cols = cols
+
 	m = &Matrix[T]{
 		arr:  arr,
-		rows: rows,
-		cols: cols,
+		head: h,
 	}
 
 	return
 }
 
-func OpenRO[T any](filepath string, rows int, cols int) (m *Matrix[T], err error) {
-	arr, err := mmarr.OpenRO[T](filepath)
+func OpenRO[T any](filepath string) (m *Matrix[T], err error) {
+	arr, err := mmarr.OpenROWithHeader[T, matrixHead](filepath)
 
 	if err != nil {
 		return
@@ -34,22 +49,25 @@ func OpenRO[T any](filepath string, rows int, cols int) (m *Matrix[T], err error
 
 	m = &Matrix[T]{
 		arr:  arr,
-		rows: rows,
-		cols: cols,
+		head: arr.Head(),
 	}
 
 	return
 }
 
 type Matrix[T any] struct {
-	arr  *mmarr.Array[T]
+	arr  *mmarr.Array[T, matrixHead]
+	head *matrixHead
+}
+
+type matrixHead struct {
 	rows int
 	cols int
 }
 
 // Dims returns the dimensions (rows + columns) of a Matrix.
 func (m *Matrix[T]) Dims() (r, c int) {
-	return m.rows, m.cols
+	return m.head.rows, m.head.cols
 }
 
 // T returns the transpose of the Matrix. Whether T returns a copy of the
@@ -79,11 +97,11 @@ func (m *Matrix[T]) At(x, y int) T {
 }
 
 func (m *Matrix[T]) Rows() int {
-	return m.rows
+	return m.head.rows
 }
 
 func (m *Matrix[T]) Cols() int {
-	return m.cols
+	return m.head.cols
 }
 
 func (m *Matrix[T]) Flush() error {
@@ -95,5 +113,5 @@ func (m *Matrix[T]) Close() error {
 }
 
 func (m *Matrix[T]) pos(i, j int) int {
-	return i*m.cols + j
+	return i*m.head.cols + j
 }

@@ -61,9 +61,9 @@ func NewWithHeader[T any, H any](filepath string, lenCap ...int) (arr *Array[T, 
 	}
 
 	if created {
-		// if copy(arr.data[:arr.head.headSize], utils.PointerToBytes(arr.head, arr.head.headSize)) != arr.head.headSize {
-		// 	return nil, errors.New("failed to write header")
-		// }
+		if copy(arr.data[:arr.head.headSize], utils.PointerToBytes(arr.head, arr.head.headSize)) != arr.head.headSize {
+			return nil, errors.New("failed to write header")
+		}
 
 		if err = arr.Flush(); err != nil {
 			return

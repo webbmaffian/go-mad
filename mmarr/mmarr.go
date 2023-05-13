@@ -106,6 +106,8 @@ func OpenROWithHeader[T any, H any](filepath string) (arr *Array[T, H], err erro
 		return
 	}
 
+	arr.head = utils.BytesToPointer[header[H]](arr.data[:arr.head.headSize])
+
 	return
 }
 

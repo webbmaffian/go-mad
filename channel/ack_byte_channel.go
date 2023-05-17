@@ -233,15 +233,33 @@ func (ch *AckByteChannel[K]) AckAllRead() (count int64) {
 }
 
 func (ch *AckByteChannel[K]) Flush() error {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+
+	return ch.flush()
+}
+
+func (ch *AckByteChannel[K]) flush() error {
 	return ch.data.Flush()
 }
 
-func (ch *AckByteChannel[K]) Close() (err error) {
+func (ch *AckByteChannel[K]) DoneWriting() {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
 
-	// TODO: Race
+	ch.closed = true
+	ch.readCond.Signal()
+}
+
+func (ch *AckByteChannel[K]) Close() (err error) {
+	ch.DoneWriting()
+
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+
 	ch.closed = true
 
-	if err = ch.Flush(); err != nil {
+	if err = ch.flush(); err != nil {
 		return
 	}
 

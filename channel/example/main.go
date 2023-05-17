@@ -14,9 +14,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
 	defer stop()
 
-	ch, err := channel.NewAckByteChannel("channel.bin", 10, 16, false, func(msg []byte, key uint64) bool {
-		return true
-	})
+	ch, err := channel.NewAckByteChannel("channel.bin", 10, 16)
 
 	if err != nil {
 		log.Println(err)
@@ -25,16 +23,15 @@ func main() {
 
 	go func() {
 		for {
-			if err := ctx.Err(); err != nil {
-				log.Println("a:", err)
+			log.Println("a: awaiting message...")
+
+			b, ok := ch.ReadAndAckOrFail()
+
+			if !ok {
 				return
 			}
 
-			log.Println("a: awaiting message...")
-			log.Println("a: received message:", ch.Read())
-			// time.Sleep(2 * time.Second)
-			log.Println("a: acknowledged", ch.AckRead(456))
-			// break
+			log.Println("a: received message:", b)
 		}
 	}()
 
@@ -48,7 +45,7 @@ func main() {
 			}
 
 			// log.Println("b: sending message...")
-			ok := ch.Write(func(b []byte) {
+			ok := ch.WriteOrFail(func(b []byte) {
 				b[0] = i
 			})
 

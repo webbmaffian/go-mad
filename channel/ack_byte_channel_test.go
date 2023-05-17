@@ -5,9 +5,7 @@ import (
 )
 
 func BenchmarkWrite(b *testing.B) {
-	ch, err := NewAckByteChannel("bench1.bin", b.N, 8, false, func(msg []byte, key uint64) bool {
-		return true
-	})
+	ch, err := NewAckByteChannel("bench1.bin", b.N, 8)
 
 	if err != nil {
 		b.Fatal(err)
@@ -20,16 +18,14 @@ func BenchmarkWrite(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		ch.Write(func(b []byte) {
+		ch.WriteOrFail(func(b []byte) {
 			b[0] = 1
 		})
 	}
 }
 
 func BenchmarkReadWrite(b *testing.B) {
-	ch, err := NewAckByteChannel("bench1.bin", b.N, 8, false, func(msg []byte, key uint64) bool {
-		return true
-	})
+	ch, err := NewAckByteChannel("bench1.bin", b.N, 8)
 
 	if err != nil {
 		b.Fatal(err)
@@ -41,18 +37,15 @@ func BenchmarkReadWrite(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N-2; i++ {
-		ch.Write(func(b []byte) {
+		ch.WriteOrFail(func(b []byte) {
 			b[0] = 1
 		})
-		b := ch.ReadAndAck()
-		_ = b
+		_, _ = ch.ReadAndAckOrFail()
 	}
 }
 
 func BenchmarkReadWriteAck(b *testing.B) {
-	ch, err := NewAckByteChannel("bench1.bin", b.N, 8, false, func(msg []byte, key uint64) bool {
-		return true
-	})
+	ch, err := NewAckByteChannel("bench1.bin", b.N, 8)
 
 	if err != nil {
 		b.Fatal(err)
@@ -64,20 +57,17 @@ func BenchmarkReadWriteAck(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N-2; i++ {
-		ch.Write(func(b []byte) {
+		ch.WriteOrFail(func(b []byte) {
 			b[0] = 1
 		})
-		b := ch.Read()
-		_ = b
-		ch.AckRead(123)
+		_, _ = ch.ReadOrFail()
+		ch.AckAll()
 	}
 }
 
 func BenchmarkConcurrentWrite(b *testing.B) {
 	const filepath = "bench1.bin"
-	ch, err := NewAckByteChannel(filepath, b.N, 8, false, func(msg []byte, key uint64) bool {
-		return true
-	})
+	ch, err := NewAckByteChannel(filepath, b.N, 8)
 
 	if err != nil {
 		b.Fatal(err)
@@ -85,9 +75,9 @@ func BenchmarkConcurrentWrite(b *testing.B) {
 
 	go func() {
 		for {
-			b := ch.ReadAndAck()
+			_, ok := ch.ReadAndAckOrFail()
 
-			if b == nil {
+			if !ok {
 				break
 			}
 		}
@@ -96,7 +86,7 @@ func BenchmarkConcurrentWrite(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		ch.Write(func(b []byte) {
+		ch.WriteOrFail(func(b []byte) {
 			b[0] = 1
 		})
 	}
@@ -107,9 +97,7 @@ func BenchmarkConcurrentWrite(b *testing.B) {
 
 func BenchmarkConcurrentRead(b *testing.B) {
 	const filepath = "bench1.bin"
-	ch, err := NewAckByteChannel(filepath, b.N, 8, false, func(msg []byte, key uint64) bool {
-		return true
-	})
+	ch, err := NewAckByteChannel(filepath, b.N, 8)
 
 	if err != nil {
 		b.Fatal(err)
@@ -117,7 +105,7 @@ func BenchmarkConcurrentRead(b *testing.B) {
 
 	go func() {
 		for i := 0; i < b.N; i++ {
-			ch.Write(func(b []byte) {
+			ch.WriteOrFail(func(b []byte) {
 				b[0] = 1
 			})
 		}
@@ -128,9 +116,9 @@ func BenchmarkConcurrentRead(b *testing.B) {
 	b.ResetTimer()
 
 	for {
-		b := ch.ReadAndAck()
+		_, ok := ch.ReadAndAckOrFail()
 
-		if b == nil {
+		if !ok {
 			break
 		}
 	}
@@ -141,9 +129,7 @@ func BenchmarkConcurrentRead(b *testing.B) {
 
 func BenchmarkConcurrentMultipleWrite(b *testing.B) {
 	const filepath = "bench1.bin"
-	ch, err := NewAckByteChannel(filepath, 1, 8, false, func(msg []byte, key uint64) bool {
-		return true
-	})
+	ch, err := NewAckByteChannel(filepath, 1, 8)
 
 	if err != nil {
 		b.Fatal(err)
@@ -151,9 +137,9 @@ func BenchmarkConcurrentMultipleWrite(b *testing.B) {
 
 	go func() {
 		for {
-			b := ch.ReadAndAck()
+			_, ok := ch.ReadAndAckOrFail()
 
-			if b == nil {
+			if !ok {
 				break
 			}
 		}
@@ -164,7 +150,7 @@ func BenchmarkConcurrentMultipleWrite(b *testing.B) {
 
 	b.RunParallel(func(p *testing.PB) {
 		for p.Next() {
-			ch.Write(func(b []byte) {
+			ch.WriteOrFail(func(b []byte) {
 				b[0] = 1
 			})
 		}

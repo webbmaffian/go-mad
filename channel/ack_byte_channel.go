@@ -10,23 +10,19 @@ import (
 	"github.com/webbmaffian/go-mad/internal/utils"
 )
 
-type AckByteChannel[K any] struct {
-	data       mmap.MMap
-	readCond   sync.Cond
-	writeCond  sync.Cond
-	mu         sync.Mutex
-	isMsg      func(msg []byte, key K) bool
-	file       *os.File
-	head       *header
-	blockWrite bool
-	closed     bool
+type AckByteChannel struct {
+	data      mmap.MMap
+	readCond  sync.Cond
+	writeCond sync.Cond
+	mu        sync.Mutex
+	file      *os.File
+	head      *header
+	closed    bool
 }
 
-func NewAckByteChannel[K any](filepath string, capacity int, itemSize int, blockWrite bool, isMsg func(msg []byte, key K) bool) (ch *AckByteChannel[K], err error) {
-	ch = &AckByteChannel[K]{
-		head:       newHeader(capacity, itemSize),
-		blockWrite: blockWrite,
-		isMsg:      isMsg,
+func NewAckByteChannel(filepath string, capacity int, itemSize int) (ch *AckByteChannel, err error) {
+	ch = &AckByteChannel{
+		head: newHeader(capacity, itemSize),
 	}
 
 	ch.readCond.L = &ch.mu
@@ -81,7 +77,7 @@ func NewAckByteChannel[K any](filepath string, capacity int, itemSize int, block
 	return
 }
 
-func (ch *AckByteChannel[K]) validateHead(fileSize int64) (err error) {
+func (ch *AckByteChannel) validateHead(fileSize int64) (err error) {
 	if fileSize < int64(ch.head.headSize) {
 		return errors.New("file too small")
 	}
@@ -133,12 +129,12 @@ func (ch *AckByteChannel[K]) validateHead(fileSize int64) (err error) {
 	return
 }
 
-func (ch *AckByteChannel[K]) Write(cb func([]byte)) bool {
+func (ch *AckByteChannel) WriteOrBlock(cb func([]byte)) bool {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
 	for ch.head.length == ch.head.capacity {
-		if ch.closed || !ch.blockWrite {
+		if ch.closed {
 			return false
 		}
 
@@ -146,67 +142,113 @@ func (ch *AckByteChannel[K]) Write(cb func([]byte)) bool {
 		ch.writeCond.Wait()
 	}
 
-	// Calculate the write offset
+	ch.write(cb)
+	return true
+}
+
+func (ch *AckByteChannel) WriteOrFail(cb func([]byte)) bool {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+
+	if ch.head.length == ch.head.capacity {
+		return false
+	}
+
+	ch.write(cb)
+	return true
+}
+
+func (ch *AckByteChannel) write(cb func([]byte)) {
 	idx := ch.index(ch.head.length)
 	ch.head.length++
 	ch.head.unread++
 	cb(ch.slice(idx))
 	ch.readCond.Signal()
-	return true
 }
 
-func (ch *AckByteChannel[K]) Read() []byte {
+func (ch *AckByteChannel) ReadOrBlock() (b []byte, ok bool) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
 	// Wait until there is data in the buffer
 	for ch.head.unread == 0 {
 		if ch.closed {
-			return nil
+			return
 		}
 
 		ch.readCond.Wait()
 	}
 
+	return ch.read(), true
+}
+
+func (ch *AckByteChannel) ReadOrFail() (b []byte, ok bool) {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+
+	if ch.head.unread == 0 {
+		return
+	}
+
+	return ch.read(), true
+}
+
+func (ch *AckByteChannel) read() []byte {
 	idx := ch.head.cursorIdx
 	ch.head.cursorIdx = ch.wrap(ch.head.cursorIdx + 1)
 	ch.head.unread--
 	return ch.slice(idx)
 }
 
-func (ch *AckByteChannel[K]) AckRead(keys ...K) (count int64) {
+func (ch *AckByteChannel) Ack(cb func([]byte) bool) (count int64) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
-	for _, k := range keys {
-		if ch.head.length <= ch.head.unread {
-			break
-		}
+	for ch.head.unread > 0 {
+		idx := ch.head.startIdx
 
-		idx := ch.head.cursorIdx
-
-		if !ch.isMsg(ch.slice(idx), k) {
+		if !cb(ch.slice(idx)) {
 			break
 		}
 
 		ch.head.startIdx = ch.index(1)
 		ch.head.length--
+		ch.head.unread--
 		count++
 	}
+
+	if count > 0 {
+		ch.writeCond.Broadcast()
+	}
+
+	return
+}
+
+func (ch *AckByteChannel) AckAll() (count int64) {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+
+	if ch.head.unread == 0 {
+		return
+	}
+
+	count = ch.indexDiff(ch.head.startIdx, ch.head.cursorIdx)
+	ch.head.startIdx = ch.head.cursorIdx
+	ch.head.unread = 0
 
 	ch.writeCond.Broadcast()
 
 	return
 }
 
-func (ch *AckByteChannel[K]) ReadAndAck() []byte {
+func (ch *AckByteChannel) ReadAndAckOrBlock() (b []byte, ok bool) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
 	// Wait until there is data in the buffer
 	for ch.head.unread == 0 {
 		if ch.closed {
-			return nil
+			return
 		}
 
 		ch.readCond.Wait()
@@ -217,33 +259,37 @@ func (ch *AckByteChannel[K]) ReadAndAck() []byte {
 	ch.head.startIdx = ch.index(1)
 	ch.head.unread--
 	ch.head.length--
-	return ch.slice(idx)
+	return ch.slice(idx), true
 }
 
-func (ch *AckByteChannel[K]) AckAllRead() (count int64) {
+func (ch *AckByteChannel) ReadAndAckOrFail() (b []byte, ok bool) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
-	count = ch.indexDiff(ch.head.startIdx, ch.head.cursorIdx)
-	ch.head.startIdx = ch.head.cursorIdx
+	if ch.head.unread == 0 {
+		return
+	}
 
-	ch.writeCond.Broadcast()
-
-	return
+	idx := ch.head.cursorIdx
+	ch.head.cursorIdx = ch.wrap(ch.head.cursorIdx + 1)
+	ch.head.startIdx = ch.index(1)
+	ch.head.unread--
+	ch.head.length--
+	return ch.slice(idx), true
 }
 
-func (ch *AckByteChannel[K]) Flush() error {
+func (ch *AckByteChannel) Flush() error {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
 	return ch.flush()
 }
 
-func (ch *AckByteChannel[K]) flush() error {
+func (ch *AckByteChannel) flush() error {
 	return ch.data.Flush()
 }
 
-func (ch *AckByteChannel[K]) DoneWriting() {
+func (ch *AckByteChannel) DoneWriting() {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
@@ -251,7 +297,7 @@ func (ch *AckByteChannel[K]) DoneWriting() {
 	ch.readCond.Signal()
 }
 
-func (ch *AckByteChannel[K]) Close() (err error) {
+func (ch *AckByteChannel) Close() (err error) {
 	ch.DoneWriting()
 
 	ch.mu.Lock()
@@ -266,20 +312,20 @@ func (ch *AckByteChannel[K]) Close() (err error) {
 	return ch.file.Close()
 }
 
-func (ch *AckByteChannel[K]) slice(index int64) []byte {
+func (ch *AckByteChannel) slice(index int64) []byte {
 	index *= ch.head.itemSize
 	index += ch.head.headSize
 	return ch.data[index : index+ch.head.itemSize]
 }
 
-func (ch *AckByteChannel[K]) index(index int64) int64 {
+func (ch *AckByteChannel) index(index int64) int64 {
 	return ch.wrap(ch.head.startIdx + index)
 }
 
-func (ch *AckByteChannel[K]) indexDiff(index1, index2 int64) int64 {
+func (ch *AckByteChannel) indexDiff(index1, index2 int64) int64 {
 	return ch.wrap(index1 - index2)
 }
 
-func (ch *AckByteChannel[K]) wrap(index int64) int64 {
+func (ch *AckByteChannel) wrap(index int64) int64 {
 	return (index + ch.head.capacity) % ch.head.capacity
 }

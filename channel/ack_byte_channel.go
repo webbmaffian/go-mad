@@ -320,7 +320,7 @@ func (ch *AckByteChannel) Rewind() (count int64) {
 	ch.head.cursorIdx = ch.head.startIdx
 
 	if count > 0 {
-		ch.writeCond.Broadcast()
+		ch.readCond.Broadcast()
 	}
 
 	return

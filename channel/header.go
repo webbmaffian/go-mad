@@ -19,7 +19,7 @@ type header struct {
 	itemSize  int64
 	startIdx  int64
 	cursorIdx int64
-	unread    int64
+	unack     int64
 	length    int64
 	capacity  int64
 }

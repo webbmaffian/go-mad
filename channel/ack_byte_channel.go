@@ -11,13 +11,13 @@ import (
 )
 
 type AckByteChannel struct {
-	data      mmap.MMap
-	readCond  sync.Cond
-	writeCond sync.Cond
-	mu        sync.Mutex
-	file      *os.File
-	head      *header
-	closed    bool
+	data          mmap.MMap
+	readCond      sync.Cond
+	writeCond     sync.Cond
+	mu            sync.Mutex
+	file          *os.File
+	head          *header
+	closedWriting bool
 }
 
 func NewAckByteChannel(filepath string, capacity int, itemSize int) (ch *AckByteChannel, err error) {
@@ -117,9 +117,9 @@ func (ch *AckByteChannel) validateHead(fileSize int64) (err error) {
 		return errors.New("invalid capacity")
 	}
 
-	// A length can never be less than the unread
-	if head.length < head.unread {
-		return errors.New("invalid unread")
+	// A length can never be less than the unack
+	if head.length < head.unack {
+		return errors.New("invalid unack")
 	}
 
 	if fileSize != head.fileSize() {
@@ -133,8 +133,12 @@ func (ch *AckByteChannel) WriteOrBlock(cb func([]byte)) bool {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
+	if ch.closedWriting {
+		return false
+	}
+
 	for ch.head.length == ch.head.capacity {
-		if ch.closed {
+		if ch.closedWriting {
 			return false
 		}
 
@@ -150,7 +154,7 @@ func (ch *AckByteChannel) WriteOrFail(cb func([]byte)) bool {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
-	if ch.head.length == ch.head.capacity {
+	if ch.closedWriting || ch.head.length == ch.head.capacity {
 		return false
 	}
 
@@ -161,7 +165,7 @@ func (ch *AckByteChannel) WriteOrFail(cb func([]byte)) bool {
 func (ch *AckByteChannel) write(cb func([]byte)) {
 	idx := ch.index(ch.head.length)
 	ch.head.length++
-	ch.head.unread++
+	ch.head.unack++
 	cb(ch.slice(idx))
 	ch.readCond.Signal()
 }
@@ -171,8 +175,8 @@ func (ch *AckByteChannel) ReadOrBlock() (b []byte, ok bool) {
 	defer ch.mu.Unlock()
 
 	// Wait until there is data in the buffer
-	for ch.head.unread == 0 {
-		if ch.closed {
+	for ch.head.unack == 0 {
+		if ch.closedWriting {
 			return
 		}
 
@@ -186,7 +190,7 @@ func (ch *AckByteChannel) ReadOrFail() (b []byte, ok bool) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
-	if ch.head.unread == 0 {
+	if ch.head.unack == 0 {
 		return
 	}
 
@@ -196,7 +200,7 @@ func (ch *AckByteChannel) ReadOrFail() (b []byte, ok bool) {
 func (ch *AckByteChannel) read() []byte {
 	idx := ch.head.cursorIdx
 	ch.head.cursorIdx = ch.wrap(ch.head.cursorIdx + 1)
-	ch.head.unread--
+	ch.head.unack--
 	return ch.slice(idx)
 }
 
@@ -204,7 +208,7 @@ func (ch *AckByteChannel) Ack(cb func([]byte) bool) (count int64) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
-	for ch.head.unread > 0 {
+	for ch.head.unack > 0 {
 		idx := ch.head.startIdx
 
 		if !cb(ch.slice(idx)) {
@@ -213,7 +217,7 @@ func (ch *AckByteChannel) Ack(cb func([]byte) bool) (count int64) {
 
 		ch.head.startIdx = ch.index(1)
 		ch.head.length--
-		ch.head.unread--
+		ch.head.unack--
 		count++
 	}
 
@@ -228,13 +232,13 @@ func (ch *AckByteChannel) AckAll() (count int64) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
-	if ch.head.unread == 0 {
+	if ch.head.unack == 0 {
 		return
 	}
 
 	count = ch.indexDiff(ch.head.startIdx, ch.head.cursorIdx)
 	ch.head.startIdx = ch.head.cursorIdx
-	ch.head.unread = 0
+	ch.head.unack = 0
 
 	ch.writeCond.Broadcast()
 
@@ -246,8 +250,8 @@ func (ch *AckByteChannel) ReadAndAckOrBlock() (b []byte, ok bool) {
 	defer ch.mu.Unlock()
 
 	// Wait until there is data in the buffer
-	for ch.head.unread == 0 {
-		if ch.closed {
+	for ch.head.unack == 0 {
+		if ch.closedWriting {
 			return
 		}
 
@@ -257,7 +261,7 @@ func (ch *AckByteChannel) ReadAndAckOrBlock() (b []byte, ok bool) {
 	idx := ch.head.cursorIdx
 	ch.head.cursorIdx = ch.wrap(ch.head.cursorIdx + 1)
 	ch.head.startIdx = ch.index(1)
-	ch.head.unread--
+	ch.head.unack--
 	ch.head.length--
 	return ch.slice(idx), true
 }
@@ -266,14 +270,14 @@ func (ch *AckByteChannel) ReadAndAckOrFail() (b []byte, ok bool) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
-	if ch.head.unread == 0 {
+	if ch.head.unack == 0 {
 		return
 	}
 
 	idx := ch.head.cursorIdx
 	ch.head.cursorIdx = ch.wrap(ch.head.cursorIdx + 1)
 	ch.head.startIdx = ch.index(1)
-	ch.head.unread--
+	ch.head.unack--
 	ch.head.length--
 	return ch.slice(idx), true
 }
@@ -289,27 +293,54 @@ func (ch *AckByteChannel) flush() error {
 	return ch.data.Flush()
 }
 
-func (ch *AckByteChannel) DoneWriting() {
+func (ch *AckByteChannel) CloseWriting() {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
-	ch.closed = true
-	ch.readCond.Signal()
+	if !ch.closedWriting {
+		ch.closedWriting = true
+		ch.readCond.Signal()
+	}
 }
 
 func (ch *AckByteChannel) Close() (err error) {
-	ch.DoneWriting()
+	ch.CloseWriting()
 
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
-	ch.closed = true
+	ch.closedWriting = true
 
 	if err = ch.flush(); err != nil {
 		return
 	}
 
 	return ch.file.Close()
+}
+
+func (ch *AckByteChannel) Len() int {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+
+	return int(ch.head.length)
+}
+
+func (ch *AckByteChannel) UnackLen() int {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+
+	return int(ch.head.unack)
+}
+
+func (ch *AckByteChannel) Reset() {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+
+	ch.head.startIdx = 0
+	ch.head.cursorIdx = 0
+	ch.head.length = 0
+	ch.head.unack = 0
+	ch.writeCond.Broadcast()
 }
 
 func (ch *AckByteChannel) slice(index int64) []byte {

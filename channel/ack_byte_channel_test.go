@@ -110,7 +110,7 @@ func BenchmarkConcurrentRead(b *testing.B) {
 			})
 		}
 
-		ch.DoneWriting()
+		ch.CloseWriting()
 	}()
 
 	b.ResetTimer()

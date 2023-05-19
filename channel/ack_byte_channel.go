@@ -108,8 +108,8 @@ func (ch *AckByteChannel) validateHead(fileSize int64) (err error) {
 	}
 
 	// Cursor index must be less than capacity
-	if head.cursorIdx >= head.capacity {
-		return errors.New("invalid capacity")
+	if head.awaitingAck > head.length {
+		return errors.New("invalid awaiting ack")
 	}
 
 	// A capacity can never be less than the length
@@ -165,6 +165,10 @@ func (ch *AckByteChannel) WriteOrReplace(cb func([]byte)) bool {
 		return false
 	}
 
+	if !ch.spaceLeft() && ch.toAck() {
+		ch.head.awaitingAck--
+	}
+
 	idx := ch.index(ch.head.length)
 	ch.head.startIdx = ch.index(1)
 	cb(ch.slice(idx))
@@ -210,28 +214,43 @@ func (ch *AckByteChannel) ReadOrFail() (b []byte, ok bool) {
 }
 
 func (ch *AckByteChannel) read() []byte {
-	idx := ch.head.cursorIdx
-	ch.head.cursorIdx = ch.wrap(ch.head.cursorIdx + 1)
+	idx := ch.index(ch.head.awaitingAck)
+	ch.head.awaitingAck++
 	return ch.slice(idx)
 }
 
-func (ch *AckByteChannel) Ack(cb func([]byte) bool) (count int64) {
+func (ch *AckByteChannel) Ack(cb func([]byte) bool) (count int64, missing bool) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
-	for ch.toAck() {
-		idx := ch.head.startIdx
+	continuous := true
+	var i int64
 
-		if !cb(ch.slice(idx)) {
-			break
+	for i = 0; i < ch.head.awaitingAck; i++ {
+		idx := ch.index(i)
+
+		if cb(ch.slice(idx)) {
+			if continuous {
+				count++
+			} else {
+				missing = true
+				break
+			}
+		} else {
+			continuous = false
 		}
-
-		ch.head.startIdx = ch.index(1)
-		ch.head.length--
-		count++
 	}
 
 	if count > 0 {
+
+		// If there was only one item in channel, it's better to continue on the same memory slot
+		// instead of moving it around (which would have increased page swapping and decreased performance).
+		if ch.head.length > 1 {
+			ch.head.startIdx = ch.index(count)
+		}
+
+		ch.head.length -= count
+		ch.head.awaitingAck -= count
 		ch.writeCond.Broadcast()
 	}
 
@@ -246,8 +265,9 @@ func (ch *AckByteChannel) AckAll() (count int64) {
 		return
 	}
 
-	count = ch.awaitingAck()
-	ch.head.startIdx = ch.head.cursorIdx
+	count = ch.head.awaitingAck
+	ch.head.startIdx = ch.index(ch.head.awaitingAck)
+	ch.head.awaitingAck = 0
 
 	if count > 0 {
 		ch.writeCond.Broadcast()
@@ -269,10 +289,14 @@ func (ch *AckByteChannel) ReadAndAckOrBlock() (b []byte, ok bool) {
 		ch.readCond.Wait()
 	}
 
-	idx := ch.head.cursorIdx
-	ch.head.cursorIdx = ch.wrap(ch.head.cursorIdx + 1)
-	ch.head.startIdx = ch.head.cursorIdx
+	idx := ch.head.startIdx
+	ch.head.startIdx = ch.index(1)
 	ch.head.length--
+
+	if ch.toAck() {
+		ch.head.awaitingAck--
+	}
+
 	return ch.slice(idx), true
 }
 
@@ -284,10 +308,14 @@ func (ch *AckByteChannel) ReadAndAckOrFail() (b []byte, ok bool) {
 		return
 	}
 
-	idx := ch.head.cursorIdx
-	ch.head.cursorIdx = ch.wrap(ch.head.cursorIdx + 1)
-	ch.head.startIdx = ch.head.cursorIdx
+	idx := ch.head.startIdx
+	ch.head.startIdx = ch.index(1)
 	ch.head.length--
+
+	if ch.toAck() {
+		ch.head.awaitingAck--
+	}
+
 	return ch.slice(idx), true
 }
 
@@ -331,8 +359,8 @@ func (ch *AckByteChannel) Rewind() (count int64) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
-	count = ch.awaitingAck()
-	ch.head.cursorIdx = ch.head.startIdx
+	count = ch.head.awaitingAck
+	ch.head.awaitingAck = 0
 
 	if count > 0 {
 		ch.readCond.Broadcast()
@@ -360,7 +388,7 @@ func (ch *AckByteChannel) ToAck() bool {
 }
 
 func (ch *AckByteChannel) toAck() bool {
-	return ch.awaitingAck() > 0
+	return ch.head.awaitingAck > 0
 }
 
 func (ch *AckByteChannel) spaceLeft() bool {
@@ -382,18 +410,14 @@ func (ch *AckByteChannel) Unread() int64 {
 }
 
 func (ch *AckByteChannel) unread() int64 {
-	return ch.indexDiff(ch.head.cursorIdx, ch.endIdx())
+	return ch.head.length - ch.head.awaitingAck
 }
 
-func (ch *AckByteChannel) AwaitingAck() int {
+func (ch *AckByteChannel) AwaitingAck() int64 {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
-	return int(ch.awaitingAck())
-}
-
-func (ch *AckByteChannel) awaitingAck() int64 {
-	return ch.head.length - ch.unread()
+	return ch.head.awaitingAck
 }
 
 func (ch *AckByteChannel) Reset() {
@@ -401,7 +425,7 @@ func (ch *AckByteChannel) Reset() {
 	defer ch.mu.Unlock()
 
 	ch.head.startIdx = 0
-	ch.head.cursorIdx = 0
+	ch.head.awaitingAck = 0
 	ch.head.length = 0
 	ch.writeCond.Broadcast()
 }
@@ -410,10 +434,6 @@ func (ch *AckByteChannel) slice(index int64) []byte {
 	index *= ch.head.itemSize
 	index += ch.head.headSize
 	return ch.data[index : index+ch.head.itemSize]
-}
-
-func (ch *AckByteChannel) endIdx() int64 {
-	return ch.index(ch.head.length)
 }
 
 func (ch *AckByteChannel) index(index int64) int64 {

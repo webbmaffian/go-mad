@@ -15,12 +15,12 @@ func newHeader(capacity int, itemSize int) *header {
 }
 
 type header struct {
-	headSize  int64
-	itemSize  int64
-	startIdx  int64
-	cursorIdx int64
-	length    int64
-	capacity  int64
+	headSize    int64
+	itemSize    int64
+	startIdx    int64
+	awaitingAck int64
+	length      int64
+	capacity    int64
 }
 
 func (h header) fileSize() int64 {

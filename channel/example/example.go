@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -15,7 +16,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
 	defer stop()
 
-	ch, err := channel.NewAckByteChannel("channel.bin", 10, 8)
+	ch, err := channel.NewAckByteChannel("channel.bin", 10, 10)
 
 	if err != nil {
 		log.Println(err)
@@ -43,8 +44,8 @@ func runServer(ch *channel.AckByteChannel) {
 		}
 
 		stats(ch, "server", "READ", string(msg))
-		// ch.Ack(func(b []byte) bool { return bytes.Equal(b, msg) })
-		// stats(ch, "server", "ACK", string(msg))
+		ch.Ack(func(b []byte) bool { return bytes.Equal(b, msg) })
+		stats(ch, "server", "ACK", string(msg))
 
 	}
 
@@ -55,14 +56,10 @@ func runClient(ch *channel.AckByteChannel) {
 	log.Println("client: started")
 	stats(ch, "client", "INIT", "")
 
-	ch.Rewind()
-
-	var i int
+	// ch.Rewind()
 
 	for {
-		i++
-
-		msg := fmt.Sprintf("msg %03d", i)
+		msg := fmt.Sprintf("%010d", time.Now().Unix())
 
 		ok := ch.WriteOrBlock(func(b []byte) {
 			copy(b, msg)
@@ -72,7 +69,7 @@ func runClient(ch *channel.AckByteChannel) {
 			break
 		}
 
-		time.Sleep(time.Second)
+		// time.Sleep(time.Second)
 
 		stats(ch, "client", "WRITE", string(msg))
 	}

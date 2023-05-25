@@ -19,12 +19,12 @@ func New[T any](filepath string, rows int, cols int) (m *Matrix[T], err error) {
 
 	h := arr.Head()
 
-	if rows != 0 && h.rows != rows {
+	if h.rows != 0 && rows != 0 && h.rows != rows {
 		err = errors.New("mismatching rows")
 		return
 	}
 
-	if cols != 0 && h.cols != cols {
+	if h.cols != 0 && cols != 0 && h.cols != cols {
 		err = errors.New("mismatching rows")
 		return
 	}

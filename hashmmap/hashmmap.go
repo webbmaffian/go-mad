@@ -66,11 +66,7 @@ func NewRaw[K utils.Unsigned, V any](filepath string, capacity ...K) (m *Raw[K, 
 	}
 
 	m.head = utils.BytesToPointer[hashmmapHeader[K]](m.data[:m.head.headSize])
-
-	var v V
-	var val any = v
-
-	_, m.keyed = val.(Keyed[K])
+	m.setKeyed()
 
 	return
 }
@@ -103,6 +99,7 @@ func OpenRawRO[K utils.Unsigned, V any](filepath string) (m *Raw[K, V], err erro
 	}
 
 	m.head = utils.BytesToPointer[hashmmapHeader[K]](m.data[:m.head.headSize])
+	m.setKeyed()
 
 	return
 }
@@ -113,6 +110,13 @@ type Raw[K utils.Unsigned, V any] struct {
 	file  *os.File
 	head  *hashmmapHeader[K]
 	keyed bool
+}
+
+func (m *Raw[K, V]) setKeyed() {
+	var v V
+	var val any = v
+
+	_, m.keyed = val.(Keyed[K])
 }
 
 func (m *Raw[K, V]) validateHead(fileSize int64) (err error) {

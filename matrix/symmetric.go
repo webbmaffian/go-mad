@@ -106,6 +106,19 @@ func (m *SymMatrix[T]) pos(i, j int) int {
 	return ((j * (m.size - 1)) - ((j * (j + 1)) / 2)) + i - 1
 }
 
+// Iterate over the lower triangular part of the matrix
+func (m *SymMatrix[T]) Each(cb func(i, j int, v *T) error) (err error) {
+	for i := 0; i < m.size; i++ {
+		for j := 0; j < i; j++ {
+			if err = cb(i, j, m.Get(i, j)); err != nil {
+				return
+			}
+		}
+	}
+
+	return
+}
+
 func maxMin(a, b int) (max, min int) {
 	if a > b {
 		return a, b

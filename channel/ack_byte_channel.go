@@ -20,7 +20,7 @@ type AckByteChannel struct {
 	closedWriting bool
 }
 
-func NewAckByteChannel(filepath string, capacity int, itemSize int) (ch *AckByteChannel, err error) {
+func NewAckByteChannel(filepath string, capacity int, itemSize int, allowResize ...bool) (ch *AckByteChannel, err error) {
 	ch = &AckByteChannel{
 		head: newHeader(capacity, itemSize),
 	}
@@ -74,6 +74,19 @@ func NewAckByteChannel(filepath string, capacity int, itemSize int) (ch *AckByte
 
 	ch.head = utils.BytesToPointer[header](ch.data[:ch.head.headSize])
 
+	if ch.needResizing(capacity, itemSize) {
+		if allowResize == nil || !allowResize[0] {
+			ch.Close()
+			return nil, errors.New("capacity and/or item size mismatch")
+		}
+
+		if err = ch.resize(filepath, capacity, itemSize); err != nil {
+			return
+		}
+
+		return NewAckByteChannel(filepath, capacity, itemSize)
+	}
+
 	return
 }
 
@@ -98,7 +111,7 @@ func (ch *AckByteChannel) validateHead(fileSize int64) (err error) {
 
 	head := utils.BytesToPointer[header](b)
 
-	if head.itemSize < 1 || head.itemSize != ch.head.itemSize {
+	if head.itemSize < 1 {
 		return errors.New("invalid item size")
 	}
 
@@ -122,6 +135,61 @@ func (ch *AckByteChannel) validateHead(fileSize int64) (err error) {
 	}
 
 	return
+}
+
+func (ch *AckByteChannel) needResizing(capacity int, itemSize int) bool {
+	return ch.head.capacity != int64(capacity) || ch.head.itemSize != int64(itemSize)
+}
+
+func (ch *AckByteChannel) resize(filepath string, capacity int, itemSize int) (err error) {
+	newFilepath := filepath + ".new"
+	dst, err := NewAckByteChannel(newFilepath, capacity, itemSize)
+
+	if err != nil {
+		return err
+	}
+
+	ch.CopyTo(dst)
+
+	if err = dst.Close(); err != nil {
+		return
+	}
+
+	if err = ch.Close(); err != nil {
+		return
+	}
+
+	if err = os.Remove(filepath); err != nil {
+		return
+	}
+
+	return os.Rename(newFilepath, filepath)
+}
+
+func (ch *AckByteChannel) CopyTo(dst *AckByteChannel) {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+
+	dst.mu.Lock()
+	defer dst.mu.Unlock()
+
+	var i int64
+
+	for i = 0; i < ch.head.capacity; i++ {
+		idx := ch.index(i)
+
+		dst.write(func(b []byte) {
+			copy(b, ch.slice(idx))
+		})
+	}
+
+	dst.head.awaitingAck = 0
+
+	if ch.head.length < dst.head.capacity {
+		dst.head.length = ch.head.length
+	} else {
+		dst.head.length = dst.head.capacity
+	}
 }
 
 func (ch *AckByteChannel) WriteOrBlock(cb func([]byte)) bool {

@@ -165,21 +165,24 @@ func (ch *AckByteChannel) WriteOrReplace(cb func([]byte)) bool {
 		return false
 	}
 
-	if !ch.spaceLeft() && ch.toAck() {
-		ch.head.awaitingAck--
-	}
-
-	idx := ch.index(ch.head.length)
-	ch.head.startIdx = ch.index(1)
-	cb(ch.slice(idx))
-	ch.readCond.Signal()
+	ch.write(cb)
 	return true
 }
 
 func (ch *AckByteChannel) write(cb func([]byte)) {
 	idx := ch.index(ch.head.length)
-	ch.head.length++
 	cb(ch.slice(idx))
+
+	if ch.spaceLeft() {
+		ch.head.length++
+	} else {
+		ch.head.startIdx = ch.index(1)
+
+		if ch.toAck() {
+			ch.head.awaitingAck--
+		}
+	}
+
 	ch.readCond.Signal()
 }
 
@@ -219,38 +222,33 @@ func (ch *AckByteChannel) read() []byte {
 	return ch.slice(idx)
 }
 
-func (ch *AckByteChannel) Ack(cb func([]byte) bool) (count int64, missing bool) {
+func (ch *AckByteChannel) Ack(cb func([]byte) bool) (found bool, resent int64) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
-	continuous := true
-	var i int64
+	if !ch.toAck() {
+		return
+	}
 
-	for i = 0; i < ch.head.awaitingAck; i++ {
-		idx := ch.index(i)
+	for resent = 0; resent < ch.head.awaitingAck; resent++ {
+		idx := ch.index(resent)
 
-		if cb(ch.slice(idx)) {
-			if continuous {
-				count++
-			} else {
-				missing = true
-				break
-			}
-		} else {
-			continuous = false
+		if found = cb(ch.slice(idx)); found {
+			break
 		}
 	}
 
-	if count > 0 {
+	if resent > 0 {
+		ch.head.awaitingAck -= resent
+		ch.readCond.Broadcast()
+	} else if found {
+		ch.head.awaitingAck--
+		ch.head.length--
 
-		// If there was only one item in channel, it's better to continue on the same memory slot
-		// instead of moving it around (which would have increased page swapping and decreased performance).
-		if ch.head.length > 1 {
-			ch.head.startIdx = ch.index(count)
+		if ch.head.length > 0 {
+			ch.head.startIdx = ch.index(1)
 		}
 
-		ch.head.length -= count
-		ch.head.awaitingAck -= count
 		ch.writeCond.Broadcast()
 	}
 
@@ -266,8 +264,8 @@ func (ch *AckByteChannel) AckAll() (count int64) {
 	}
 
 	count = ch.head.awaitingAck
-	ch.head.startIdx = ch.index(ch.head.awaitingAck)
 	ch.head.awaitingAck = 0
+	ch.head.startIdx = ch.index(count)
 
 	if count > 0 {
 		ch.writeCond.Broadcast()
@@ -290,12 +288,9 @@ func (ch *AckByteChannel) ReadAndAckOrBlock() (b []byte, ok bool) {
 	}
 
 	idx := ch.head.startIdx
-	ch.head.startIdx = ch.index(1)
+	ch.head.startIdx = ch.index(1 + ch.head.awaitingAck)
+	ch.head.awaitingAck = 0
 	ch.head.length--
-
-	if ch.toAck() {
-		ch.head.awaitingAck--
-	}
 
 	return ch.slice(idx), true
 }
@@ -309,12 +304,9 @@ func (ch *AckByteChannel) ReadAndAckOrFail() (b []byte, ok bool) {
 	}
 
 	idx := ch.head.startIdx
-	ch.head.startIdx = ch.index(1)
+	ch.head.startIdx = ch.index(1 + ch.head.awaitingAck)
+	ch.head.awaitingAck = 0
 	ch.head.length--
-
-	if ch.toAck() {
-		ch.head.awaitingAck--
-	}
 
 	return ch.slice(idx), true
 }

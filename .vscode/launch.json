@@ -10,6 +10,13 @@
 			"request": "launch",
 			"mode": "auto",
 			"program": "${workspaceFolder}/channel/example"
+		},
+		{
+			"name": "Launch channel example 2",
+			"type": "go",
+			"request": "launch",
+			"mode": "auto",
+			"program": "${workspaceFolder}/channel/example2"
 		}
 	]
 }

@@ -285,6 +285,7 @@ func (ch *ByteChannel) ReadToCallback(cb func([]byte) error, undoOnError bool) (
 
 	if undoOnError && err != nil {
 		ch.undoRead()
+		ch.readCond.Broadcast()
 	} else {
 		ch.writeCond.Broadcast()
 	}

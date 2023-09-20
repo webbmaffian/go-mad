@@ -87,6 +87,17 @@ func NewByteChannel(filepath string, capacity int, itemSize int, allowResize ...
 		return NewByteChannel(filepath, capacity, itemSize)
 	}
 
+	// We don't support acknowledgements here - reset the counter and update length.
+	if ch.head.awaitingAck > 0 {
+		if ch.head.awaitingAck > ch.head.length {
+			ch.head.length = 0
+		} else {
+			ch.head.length -= ch.head.awaitingAck
+		}
+
+		ch.head.awaitingAck = 0
+	}
+
 	return
 }
 

@@ -382,11 +382,11 @@ func (ch *ByteChannel) Cap() int64 {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
-	return ch.len()
+	return ch.cap()
 }
 
 func (ch *ByteChannel) cap() int64 {
-	return ch.head.length
+	return ch.head.capacity
 }
 
 func (ch *ByteChannel) Reset() {

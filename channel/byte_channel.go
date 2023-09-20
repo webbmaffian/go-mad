@@ -12,8 +12,8 @@ import (
 
 type ByteChannel struct {
 	data          mmap.MMap
-	readCond      sync.Cond
-	writeCond     sync.Cond
+	readCond      sync.Cond // Awaited by readers, notified by writers.
+	writeCond     sync.Cond // Awaited by writers, notified by readers.
 	mu            sync.Mutex
 	file          *os.File
 	head          *header
@@ -272,19 +272,24 @@ func (ch *ByteChannel) Wait() (ok bool) {
 	return true
 }
 
-func (ch *ByteChannel) ReadToCallback(cb func([]byte)) (ok bool) {
+func (ch *ByteChannel) ReadToCallback(cb func([]byte) error, undoOnError bool) (err error) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
 	// If there is nothing to read, fail
 	if ch.empty() {
-		return
+		return ErrEmpty
 	}
 
-	cb(ch.read())
-	ch.writeCond.Broadcast()
+	err = cb(ch.read())
 
-	return true
+	if undoOnError && err != nil {
+		ch.undoRead()
+	} else {
+		ch.writeCond.Broadcast()
+	}
+
+	return
 }
 
 func (ch *ByteChannel) read() []byte {
@@ -296,6 +301,11 @@ func (ch *ByteChannel) read() []byte {
 	}
 
 	return ch.slice(idx)
+}
+
+func (ch *ByteChannel) undoRead() {
+	ch.head.startIdx = ch.index(-1)
+	ch.head.length++
 }
 
 func (ch *ByteChannel) Flush() error {
@@ -315,7 +325,7 @@ func (ch *ByteChannel) CloseWriting() {
 
 	if !ch.closedWriting {
 		ch.closedWriting = true
-		ch.readCond.Signal()
+		ch.writeCond.Signal()
 	}
 }
 
@@ -395,10 +405,6 @@ func (ch *ByteChannel) slice(index int64) []byte {
 
 func (ch *ByteChannel) index(index int64) int64 {
 	return ch.wrap(ch.head.startIdx + index)
-}
-
-func (ch *ByteChannel) indexDiff(left, right int64) int64 {
-	return ch.wrap(right - left)
 }
 
 func (ch *ByteChannel) wrap(index int64) int64 {

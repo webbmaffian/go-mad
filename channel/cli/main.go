@@ -41,6 +41,8 @@ func main() {
 	capacity := writer.Newline()
 	itemSize := writer.Newline()
 	startIdx := writer.Newline()
+	itemsWritten := writer.Newline()
+	itemsRead := writer.Newline()
 
 	// start listening for updates and render
 	writer.Start()
@@ -58,6 +60,8 @@ func main() {
 			fmt.Fprintf(length, "Length: %d\n", ch.Len())
 			fmt.Fprintf(unread, "Unread: %d\n", ch.Unread())
 			fmt.Fprintf(awaitingAck, "Awaiting ack: %d\n", ch.AwaitingAck())
+			fmt.Fprintf(itemsWritten, "Items written: %d\n", ch.ItemsWritten())
+			fmt.Fprintf(itemsRead, "Items read: %d\n", ch.ItemsRead())
 		}
 	}
 }

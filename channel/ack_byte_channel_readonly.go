@@ -130,12 +130,12 @@ func (ch *AckByteChannelReadonly) AwaitingAck() int64 {
 	return ch.head.awaitingAck
 }
 
-func (ch *AckByteChannelReadonly) MsgWritten() uint64 {
-	return ch.head.written
+func (ch *AckByteChannelReadonly) ItemsWritten() uint64 {
+	return ch.head.itemsWritten
 }
 
-func (ch *AckByteChannelReadonly) MsgRead() uint64 {
-	return ch.head.read
+func (ch *AckByteChannelReadonly) ItemsRead() uint64 {
+	return ch.head.itemsRead
 }
 
 func (ch *AckByteChannelReadonly) slice(index int64) []byte {

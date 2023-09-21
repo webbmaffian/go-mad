@@ -88,8 +88,8 @@ func NewAckByteChannel(filepath string, capacity int, itemSize int, allowResize 
 	}
 
 	// Reset statistics
-	ch.head.written = 0
-	ch.head.read = 0
+	ch.head.itemsWritten = 0
+	ch.head.itemsRead = 0
 
 	return
 }
@@ -255,7 +255,7 @@ func (ch *AckByteChannel) write(cb func([]byte)) {
 		}
 	}
 
-	ch.head.written++
+	ch.head.itemsWritten++
 	ch.readCond.Signal()
 }
 
@@ -292,7 +292,7 @@ func (ch *AckByteChannel) ReadOrFail() (b []byte, ok bool) {
 func (ch *AckByteChannel) read() []byte {
 	idx := ch.index(ch.head.awaitingAck)
 	ch.head.awaitingAck++
-	ch.head.read++
+	ch.head.itemsRead++
 	return ch.slice(idx)
 }
 
@@ -494,6 +494,20 @@ func (ch *AckByteChannel) Reset() {
 	ch.head.awaitingAck = 0
 	ch.head.length = 0
 	ch.writeCond.Broadcast()
+}
+
+func (ch *AckByteChannel) ItemsWritten() uint64 {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+
+	return ch.head.itemsWritten
+}
+
+func (ch *AckByteChannel) ItemsRead() uint64 {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+
+	return ch.head.itemsRead
 }
 
 func (ch *AckByteChannel) slice(index int64) []byte {

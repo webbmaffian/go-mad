@@ -99,8 +99,8 @@ func NewByteChannel(filepath string, capacity int, itemSize int, allowResize ...
 	}
 
 	// Reset statistics
-	ch.head.written = 0
-	ch.head.read = 0
+	ch.head.itemsWritten = 0
+	ch.head.itemsRead = 0
 
 	return
 }
@@ -255,7 +255,7 @@ func (ch *ByteChannel) write(cb func([]byte)) {
 		ch.head.startIdx = ch.index(1)
 	}
 
-	ch.head.written++
+	ch.head.itemsWritten++
 	ch.readCond.Signal()
 }
 
@@ -301,7 +301,7 @@ func (ch *ByteChannel) ReadToCallback(cb func([]byte) error, undoOnError bool) (
 func (ch *ByteChannel) read() []byte {
 	idx := ch.index(0)
 	ch.head.length--
-	ch.head.read++
+	ch.head.itemsRead++
 
 	if ch.head.length > 0 {
 		ch.head.startIdx = ch.index(1)
@@ -313,7 +313,7 @@ func (ch *ByteChannel) read() []byte {
 func (ch *ByteChannel) undoRead() {
 	ch.head.startIdx = ch.index(-1)
 	ch.head.length++
-	ch.head.read--
+	ch.head.itemsRead--
 }
 
 func (ch *ByteChannel) Flush() error {
@@ -405,18 +405,18 @@ func (ch *ByteChannel) Reset() {
 	ch.writeCond.Broadcast()
 }
 
-func (ch *ByteChannel) MsgWritten() uint64 {
+func (ch *ByteChannel) ItemsWritten() uint64 {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
-	return ch.head.written
+	return ch.head.itemsWritten
 }
 
-func (ch *ByteChannel) MsgRead() uint64 {
+func (ch *ByteChannel) ItemsRead() uint64 {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
-	return ch.head.read
+	return ch.head.itemsRead
 }
 
 func (ch *ByteChannel) slice(index int64) []byte {

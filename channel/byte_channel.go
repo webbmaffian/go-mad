@@ -251,6 +251,7 @@ func (ch *ByteChannel) write(cb func([]byte)) {
 		ch.head.startIdx = ch.index(1)
 	}
 
+	ch.head.written++
 	ch.readCond.Signal()
 }
 
@@ -296,6 +297,7 @@ func (ch *ByteChannel) ReadToCallback(cb func([]byte) error, undoOnError bool) (
 func (ch *ByteChannel) read() []byte {
 	idx := ch.index(0)
 	ch.head.length--
+	ch.head.read++
 
 	if ch.head.length > 0 {
 		ch.head.startIdx = ch.index(1)
@@ -307,6 +309,7 @@ func (ch *ByteChannel) read() []byte {
 func (ch *ByteChannel) undoRead() {
 	ch.head.startIdx = ch.index(-1)
 	ch.head.length++
+	ch.head.read--
 }
 
 func (ch *ByteChannel) Flush() error {
@@ -396,6 +399,20 @@ func (ch *ByteChannel) Reset() {
 	ch.head.startIdx = 0
 	ch.head.length = 0
 	ch.writeCond.Broadcast()
+}
+
+func (ch *ByteChannel) MsgWritten() uint64 {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+
+	return ch.head.written
+}
+
+func (ch *ByteChannel) MsgRead() uint64 {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+
+	return ch.head.read
 }
 
 func (ch *ByteChannel) slice(index int64) []byte {

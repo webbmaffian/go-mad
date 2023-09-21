@@ -251,6 +251,7 @@ func (ch *AckByteChannel) write(cb func([]byte)) {
 		}
 	}
 
+	ch.head.written++
 	ch.readCond.Signal()
 }
 
@@ -287,6 +288,7 @@ func (ch *AckByteChannel) ReadOrFail() (b []byte, ok bool) {
 func (ch *AckByteChannel) read() []byte {
 	idx := ch.index(ch.head.awaitingAck)
 	ch.head.awaitingAck++
+	ch.head.read++
 	return ch.slice(idx)
 }
 

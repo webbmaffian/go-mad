@@ -130,6 +130,14 @@ func (ch *AckByteChannelReadonly) AwaitingAck() int64 {
 	return ch.head.awaitingAck
 }
 
+func (ch *AckByteChannelReadonly) MsgWritten() uint64 {
+	return ch.head.written
+}
+
+func (ch *AckByteChannelReadonly) MsgRead() uint64 {
+	return ch.head.read
+}
+
 func (ch *AckByteChannelReadonly) slice(index int64) []byte {
 	index *= ch.head.itemSize
 	index += ch.head.headSize

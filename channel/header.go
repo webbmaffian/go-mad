@@ -21,6 +21,8 @@ type header struct {
 	awaitingAck int64
 	length      int64
 	capacity    int64
+	written     uint64
+	read        uint64
 }
 
 func (h header) fileSize() int64 {

@@ -87,6 +87,10 @@ func NewAckByteChannel(filepath string, capacity int, itemSize int, allowResize 
 		return NewAckByteChannel(filepath, capacity, itemSize)
 	}
 
+	// Reset statistics
+	ch.head.written = 0
+	ch.head.read = 0
+
 	return
 }
 

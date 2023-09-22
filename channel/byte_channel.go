@@ -310,7 +310,7 @@ func (ch *ByteChannel) WaitForSync(ctx context.Context) error {
 	}()
 
 	ch.mu.Lock()
-	for ch.head.itemsRead < ch.head.itemsWritten && ctx.Err() == nil {
+	for !ch.empty() && ctx.Err() == nil {
 		ch.readCond.Wait() // wait either for items to be read or for the context to be done
 	}
 	ch.mu.Unlock()

@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -296,6 +297,26 @@ func (ch *ByteChannel) ReadToCallback(cb func([]byte) error, undoOnError bool) (
 	}
 
 	return
+}
+
+func (ch *ByteChannel) WaitForSync(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel() // Ensure that the child context is canceled when we're done
+
+	// This goroutine waits for the context to be done and then signals the main goroutine.
+	go func() {
+		<-ctx.Done()
+		ch.readCond.Broadcast() // wake up the main goroutine
+	}()
+
+	ch.mu.Lock()
+	for ch.head.itemsRead < ch.head.itemsWritten && ctx.Err() == nil {
+		ch.readCond.Wait() // wait either for items to be read or for the context to be done
+	}
+	ch.mu.Unlock()
+
+	// If the context was cancelled or timed out, return its error.
+	return ctx.Err()
 }
 
 func (ch *ByteChannel) read() []byte {

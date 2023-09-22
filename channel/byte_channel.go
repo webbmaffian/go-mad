@@ -257,7 +257,7 @@ func (ch *ByteChannel) write(cb func([]byte)) {
 	}
 
 	ch.head.itemsWritten++
-	ch.readCond.Signal()
+	ch.readCond.Broadcast()
 }
 
 func (ch *ByteChannel) Wait() (ok bool) {
@@ -354,7 +354,7 @@ func (ch *ByteChannel) CloseWriting() {
 
 	if !ch.closedWriting {
 		ch.closedWriting = true
-		ch.writeCond.Signal()
+		ch.writeCond.Broadcast()
 	}
 }
 

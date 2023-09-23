@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -259,7 +260,8 @@ func (ch *AckByteChannel) write(cb func([]byte)) {
 	ch.readCond.Signal()
 }
 
-func (ch *AckByteChannel) ReadOrBlock() (b []byte, ok bool) {
+// Wait until there is anything to read
+func (ch *AckByteChannel) Wait() (ok bool) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
@@ -274,19 +276,70 @@ func (ch *AckByteChannel) ReadOrBlock() (b []byte, ok bool) {
 		ch.readCond.Wait()
 	}
 
-	return ch.read(), true
+	return true
 }
 
-func (ch *AckByteChannel) ReadOrFail() (b []byte, ok bool) {
+// Wait until something has been read and need to be acknowledged
+func (ch *AckByteChannel) WaitUntilRead(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel() // Ensure that the child context is canceled when we're done
+
+	// This goroutine waits for the context to be done and then signals the main goroutine.
+	go func() {
+		<-ctx.Done()
+		ch.writeCond.Broadcast() // wake up the main goroutine
+	}()
+
+	ch.mu.Lock()
+	for !ch.toAck() && ctx.Err() == nil {
+		ch.writeCond.Wait() // wait either for items to be read or for the context to be done
+	}
+	ch.mu.Unlock()
+
+	// If the context was cancelled or timed out, return its error.
+	return ctx.Err()
+}
+
+// Wait until channel is empty
+func (ch *AckByteChannel) WaitUntilEmpty(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel() // Ensure that the child context is canceled when we're done
+
+	// This goroutine waits for the context to be done and then signals the main goroutine.
+	go func() {
+		<-ctx.Done()
+		ch.writeCond.Broadcast() // wake up the main goroutine
+	}()
+
+	ch.mu.Lock()
+	for !ch.empty() && ctx.Err() == nil {
+		ch.writeCond.Wait() // wait either for items to be read or for the context to be done
+	}
+	ch.mu.Unlock()
+
+	// If the context was cancelled or timed out, return its error.
+	return ctx.Err()
+}
+
+func (ch *AckByteChannel) ReadToCallback(cb func([]byte) error, undoOnError bool) (err error) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
 	// If there is nothing to read, fail
-	if !ch.toRead() {
-		return
+	if ch.empty() {
+		return ErrEmpty
 	}
 
-	return ch.read(), true
+	err = cb(ch.read())
+
+	if undoOnError && err != nil {
+		ch.undoRead()
+		ch.readCond.Broadcast()
+	} else {
+		ch.writeCond.Broadcast()
+	}
+
+	return
 }
 
 func (ch *AckByteChannel) read() []byte {
@@ -296,7 +349,14 @@ func (ch *AckByteChannel) read() []byte {
 	return ch.slice(idx)
 }
 
-func (ch *AckByteChannel) Ack(cb func([]byte) bool) (found bool, resent int64) {
+func (ch *AckByteChannel) undoRead() {
+	ch.head.startIdx = ch.index(-1)
+	ch.head.length++
+	ch.head.awaitingAck--
+	ch.head.itemsRead--
+}
+
+func (ch *AckByteChannel) Ack() {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
@@ -304,85 +364,14 @@ func (ch *AckByteChannel) Ack(cb func([]byte) bool) (found bool, resent int64) {
 		return
 	}
 
-	for resent = 0; resent < ch.head.awaitingAck; resent++ {
-		idx := ch.index(resent)
-
-		if found = cb(ch.slice(idx)); found {
-			break
-		}
-	}
-
-	if resent > 0 {
-		ch.head.awaitingAck -= resent
-		ch.readCond.Broadcast()
-	} else if found {
-		ch.head.awaitingAck--
-		ch.head.length--
-
-		if ch.head.length > 0 {
-			ch.head.startIdx = ch.index(1)
-		}
-
-		ch.writeCond.Broadcast()
-	}
-
-	return
-}
-
-func (ch *AckByteChannel) AckAll() (count int64) {
-	ch.mu.Lock()
-	defer ch.mu.Unlock()
-
-	if !ch.toAck() {
-		return
-	}
-
-	count = ch.head.awaitingAck
-	ch.head.awaitingAck = 0
-	ch.head.startIdx = ch.index(count)
-
-	if count > 0 {
-		ch.writeCond.Broadcast()
-	}
-
-	return
-}
-
-func (ch *AckByteChannel) ReadAndAckOrBlock() (b []byte, ok bool) {
-	ch.mu.Lock()
-	defer ch.mu.Unlock()
-
-	// Wait until there is data in the buffer
-	for !ch.toRead() {
-		if ch.closedWriting {
-			return
-		}
-
-		ch.readCond.Wait()
-	}
-
-	idx := ch.head.startIdx
-	ch.head.startIdx = ch.index(1 + ch.head.awaitingAck)
-	ch.head.awaitingAck = 0
+	ch.head.awaitingAck--
 	ch.head.length--
 
-	return ch.slice(idx), true
-}
-
-func (ch *AckByteChannel) ReadAndAckOrFail() (b []byte, ok bool) {
-	ch.mu.Lock()
-	defer ch.mu.Unlock()
-
-	if !ch.toRead() {
-		return
+	if ch.head.length > 0 {
+		ch.head.startIdx = ch.index(1)
 	}
 
-	idx := ch.head.startIdx
-	ch.head.startIdx = ch.index(1 + ch.head.awaitingAck)
-	ch.head.awaitingAck = 0
-	ch.head.length--
-
-	return ch.slice(idx), true
+	ch.writeCond.Broadcast()
 }
 
 func (ch *AckByteChannel) Flush() error {
@@ -461,10 +450,25 @@ func (ch *AckByteChannel) spaceLeft() bool {
 	return ch.head.length < ch.head.capacity
 }
 
+func (ch *AckByteChannel) Empty() bool {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+
+	return ch.empty()
+}
+
+func (ch *AckByteChannel) empty() bool {
+	return ch.len() <= 0
+}
+
 func (ch *AckByteChannel) Len() int64 {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
+	return ch.len()
+}
+
+func (ch *AckByteChannel) len() int64 {
 	return ch.head.length
 }
 
@@ -518,10 +522,6 @@ func (ch *AckByteChannel) slice(index int64) []byte {
 
 func (ch *AckByteChannel) index(index int64) int64 {
 	return ch.wrap(ch.head.startIdx + index)
-}
-
-func (ch *AckByteChannel) indexDiff(left, right int64) int64 {
-	return ch.wrap(right - left)
 }
 
 func (ch *AckByteChannel) wrap(index int64) int64 {

@@ -9,3 +9,5 @@ func (err channelError) Error() string {
 }
 
 const ErrEmpty = channelError("channel is empty")
+const ErrClosed = channelError("channel is closed")
+const ErrWritingClosed = channelError("channel is closed for writing")

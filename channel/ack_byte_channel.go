@@ -261,7 +261,7 @@ func (ch *AckByteChannel) write(cb func([]byte)) {
 }
 
 // Wait until there is anything to read
-func (ch *AckByteChannel) Wait() (ok bool) {
+func (ch *AckByteChannel) Wait() (unread int64, err error) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
@@ -270,17 +270,21 @@ func (ch *AckByteChannel) Wait() (ok bool) {
 
 		// If writing is closed, there will never be any more to read
 		if ch.closedWriting {
-			return
+			return 0, ErrWritingClosed
 		}
 
 		ch.readCond.Wait()
 	}
 
-	return ch.toRead()
+	if ch.closed {
+		return 0, ErrClosed
+	}
+
+	return ch.unread(), nil
 }
 
 // Wait until something has been read and need to be acknowledged
-func (ch *AckByteChannel) WaitUntilRead() (ok bool) {
+func (ch *AckByteChannel) WaitUntilRead() (read int64, err error) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
@@ -288,11 +292,15 @@ func (ch *AckByteChannel) WaitUntilRead() (ok bool) {
 		ch.writeCond.Wait()
 	}
 
-	return ch.toAck()
+	if ch.closed {
+		return 0, ErrClosed
+	}
+
+	return ch.head.awaitingAck, nil
 }
 
 // Wait until channel is empty
-func (ch *AckByteChannel) WaitUntilEmpty() (ok bool) {
+func (ch *AckByteChannel) WaitUntilEmpty() (err error) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
@@ -300,7 +308,11 @@ func (ch *AckByteChannel) WaitUntilEmpty() (ok bool) {
 		ch.writeCond.Wait()
 	}
 
-	return ch.empty()
+	if ch.closed {
+		return ErrClosed
+	}
+
+	return
 }
 
 func (ch *AckByteChannel) ReadToCallback(cb func([]byte) error, undoOnError bool) (err error) {

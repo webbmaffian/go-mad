@@ -1,7 +1,6 @@
 package channel
 
 import (
-	"context"
 	"errors"
 	"io"
 	"os"
@@ -13,11 +12,12 @@ import (
 
 type AckByteChannel struct {
 	data          mmap.MMap
-	readCond      sync.Cond
-	writeCond     sync.Cond
+	readCond      sync.Cond // Awaited by readers, notified by writers.
+	writeCond     sync.Cond // Awaited by writers, notified by readers.
 	mu            sync.Mutex
 	file          *os.File
 	head          *header
+	closed        bool
 	closedWriting bool
 }
 
@@ -266,7 +266,7 @@ func (ch *AckByteChannel) Wait() (ok bool) {
 	defer ch.mu.Unlock()
 
 	// Wait until there is data in the buffer to read
-	for !ch.toRead() {
+	for !ch.toRead() && !ch.closed {
 
 		// If writing is closed, there will never be any more to read
 		if ch.closedWriting {
@@ -276,49 +276,31 @@ func (ch *AckByteChannel) Wait() (ok bool) {
 		ch.readCond.Wait()
 	}
 
-	return true
+	return ch.toRead()
 }
 
 // Wait until something has been read and need to be acknowledged
-func (ch *AckByteChannel) WaitUntilRead(ctx context.Context) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel() // Ensure that the child context is canceled when we're done
-
-	// This goroutine waits for the context to be done and then signals the main goroutine.
-	go func() {
-		<-ctx.Done()
-		ch.writeCond.Broadcast() // wake up the main goroutine
-	}()
-
+func (ch *AckByteChannel) WaitUntilRead() (ok bool) {
 	ch.mu.Lock()
-	for !ch.toAck() && ctx.Err() == nil {
-		ch.writeCond.Wait() // wait either for items to be read or for the context to be done
-	}
-	ch.mu.Unlock()
+	defer ch.mu.Unlock()
 
-	// If the context was cancelled or timed out, return its error.
-	return ctx.Err()
+	for !ch.toAck() && !ch.closed {
+		ch.writeCond.Wait()
+	}
+
+	return ch.toAck()
 }
 
 // Wait until channel is empty
-func (ch *AckByteChannel) WaitUntilEmpty(ctx context.Context) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel() // Ensure that the child context is canceled when we're done
-
-	// This goroutine waits for the context to be done and then signals the main goroutine.
-	go func() {
-		<-ctx.Done()
-		ch.writeCond.Broadcast() // wake up the main goroutine
-	}()
-
+func (ch *AckByteChannel) WaitUntilEmpty() (ok bool) {
 	ch.mu.Lock()
-	for !ch.empty() && ctx.Err() == nil {
-		ch.writeCond.Wait() // wait either for items to be read or for the context to be done
-	}
-	ch.mu.Unlock()
+	defer ch.mu.Unlock()
 
-	// If the context was cancelled or timed out, return its error.
-	return ctx.Err()
+	for !ch.empty() && !ch.closed {
+		ch.writeCond.Wait()
+	}
+
+	return ch.empty()
 }
 
 func (ch *AckByteChannel) ReadToCallback(cb func([]byte) error, undoOnError bool) (err error) {
@@ -396,12 +378,13 @@ func (ch *AckByteChannel) CloseWriting() {
 }
 
 func (ch *AckByteChannel) Close() (err error) {
-	ch.CloseWriting()
-
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
+	ch.closed = true
 	ch.closedWriting = true
+	ch.readCond.Broadcast()
+	ch.writeCond.Broadcast()
 
 	if err = ch.flush(); err != nil {
 		return
